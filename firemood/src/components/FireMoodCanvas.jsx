@@ -1,86 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
-import * as THREE from 'three'
 import { useFM } from '../store'
 import { getProfile } from '../engine/DaronEngine'
 
-const pointerPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
-
-function emojiTexture(symbol, palette){
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = 256
-  const ctx = canvas.getContext('2d')
-  const grad = ctx.createLinearGradient(0, 0, 256, 256)
-  grad.addColorStop(0, palette.glow)
-  grad.addColorStop(1, palette.base)
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 256, 256)
-  ctx.font = '150px "Apple Color Emoji", "Noto Color Emoji", sans-serif'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.shadowColor = palette.glow
-  ctx.shadowBlur = 28
-  ctx.fillText(symbol, 128, 140)
-  return new THREE.CanvasTexture(canvas)
-}
-
-function createBackgroundMaterial(palette){
-  return new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    uniforms: {
-      uTime: { value: 0 },
-      uAudio: { value: 0 },
-      uGlow: { value: new THREE.Color(palette.glow) },
-      uBase: { value: new THREE.Color(palette.base) },
-    },
-    vertexShader: /* glsl */`
-      varying vec2 vUv;
-      void main(){
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */`
-      varying vec2 vUv;
-      uniform float uTime;
-      uniform float uAudio;
-      uniform vec3 uGlow;
-      uniform vec3 uBase;
-
-      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
-      float noise(vec2 p){
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        float a = hash(i);
-        float b = hash(i + vec2(1.0, 0.0));
-        float c = hash(i + vec2(0.0, 1.0));
-        float d = hash(i + vec2(1.0, 1.0));
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-      }
-
-      void main(){
-        vec2 uv = vUv * 2.0 - 1.0;
-        float t = uTime * 0.12;
-        float swirl = noise(uv * 3.0 + vec2(t * 0.7, -t * 0.4));
-        float ridge = noise(uv * 5.0 - vec2(t, t * 0.6));
-        float flow = sin((uv.x * 3.0 + swirl * 3.14) + t * 4.0);
-        float energy = mix(0.22, 1.0, uAudio);
-
-        float mask = smoothstep(1.6, 0.3, length(uv));
-        float nebula = mix(swirl, ridge, 0.5) * mask;
-        float halo = smoothstep(0.4 + energy * 0.2, 0.2, length(uv + 0.06 * sin(t)));
-
-        vec3 color = mix(uBase, uGlow, nebula * 0.6 + halo * 0.4 + energy * 0.3);
-        color += 0.1 * vec3(flow * 0.5 + nebula, halo, swirl);
-        gl_FragColor = vec4(color, mask * 0.95);
-      }
-    `,
-  })
-}
+function lerp(a, b, t){ return a + (b - a) * t }
+function clamp(v, min, max){ return Math.min(max, Math.max(min, v)) }
+function dist(a, b){ const dx = a.x - b.x; const dy = a.y - b.y; return Math.hypot(dx, dy) }
 
 export default function FireMoodCanvas({ onDone }){
   const containerRef = useRef(null)
+  const canvasRef = useRef(null)
   const { mood, sensation, intensity, setResource } = useFM()
   const [clonesLeft, setClonesLeft] = useState(intensity)
   const [audioName, setAudioName] = useState('Ambiance interne')
@@ -104,138 +32,47 @@ export default function FireMoodCanvas({ onDone }){
     setStageError(null)
 
     const { palette, resource } = getProfile(mood, sensation, intensity)
-    const scene = new THREE.Scene()
-    const camera = new THREE.PerspectiveCamera(65, container.clientWidth / container.clientHeight, 0.01, 200)
-    camera.position.set(0, 0.2, 6.5)
-
-    let renderer
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    } catch (err) {
-      console.error('WebGL init failed', err)
-      setStageError('Votre navigateur bloque WebGL. Essayez un autre navigateur pour voir le rituel animé.')
+    const canvas = document.createElement('canvas')
+    canvasRef.current = canvas
+    const ctx = canvas.getContext('2d')
+    if(!ctx){
+      setStageError('Canvas non supporté par ce navigateur.')
       return () => {}
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.9))
-    renderer.setSize(container.clientWidth, container.clientHeight)
-    renderer.outputColorSpace = THREE.SRGBColorSpace
-    container.appendChild(renderer.domElement)
 
-    const ambient = new THREE.AmbientLight(palette.glow, 1.1)
-    scene.add(ambient)
-    const movingLight = new THREE.PointLight(palette.base, 16, 18, 2)
-    movingLight.position.set(0, 2.5, 3)
-    scene.add(movingLight)
-    scene.add(new THREE.DirectionalLight('#ffffff', 0.25))
-
-    const bg = new THREE.Mesh(new THREE.PlaneGeometry(16, 9, 1, 1), createBackgroundMaterial(palette))
-    bg.position.set(0, 0, -4)
-    scene.add(bg)
-
-    const vortexGeo = new THREE.TorusKnotGeometry(1.65, 0.22, 280, 28, 1, 3)
-    const vortexMat = new THREE.MeshStandardMaterial({
-      color: palette.glow,
-      emissive: palette.base,
-      emissiveIntensity: 0.85,
-      roughness: 0.18,
-      metalness: 0.45,
-      transparent: true,
-      opacity: 0.7,
-    })
-    const vortex = new THREE.Mesh(vortexGeo, vortexMat)
-    vortex.rotation.x = Math.PI * 0.5
-    scene.add(vortex)
-
-    const starGeo = new THREE.BufferGeometry()
-    const starCount = 1200
-    const starPositions = new Float32Array(starCount * 3)
-    for (let i = 0; i < starCount * 3; i++) starPositions[i] = (Math.random() - 0.5) * 18
-    starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3))
-    const starMat = new THREE.PointsMaterial({ color: palette.base, size: 0.04, transparent: true, opacity: 0.65 })
-    const stars = new THREE.Points(starGeo, starMat)
-    scene.add(stars)
+    canvas.style.width = '100%'
+    canvas.style.height = '100%'
+    container.appendChild(canvas)
 
     const clones = []
-    const emojiMap = emojiTexture(mood, palette)
-    const spriteBase = new THREE.SpriteMaterial({ map: emojiMap, transparent: true, depthWrite: false })
     for (let i = 0; i < intensity; i++){
-      const mesh = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.24 + Math.random() * 0.12, 1),
-        new THREE.MeshStandardMaterial({
-          color: palette.base,
-          emissive: palette.glow,
-          emissiveIntensity: 0.6,
-          roughness: 0.3,
-          metalness: 0.4,
-        })
-      )
-      const sprite = new THREE.Sprite(spriteBase.clone())
-      sprite.scale.set(0.9, 0.9, 0.9)
-      const pos = new THREE.Vector3((Math.random() - 0.5) * 3.4, -1 + Math.random() * 2.2, Math.random() * 1.2 - 0.6)
-      const vel = new THREE.Vector3((Math.random() - 0.5) * 0.06, 0.02 + Math.random() * 0.05, (Math.random() - 0.5) * 0.06)
-      mesh.position.copy(pos)
-      sprite.position.copy(pos.clone().add(new THREE.Vector3(0, 0.05, 0)))
-      scene.add(mesh)
-      scene.add(sprite)
-      clones.push({ mesh, sprite, pos, vel, alive: true, pulse: Math.random() * Math.PI * 2 })
+      const angle = Math.random() * Math.PI * 2
+      const radius = 160 + Math.random() * 80
+      const pos = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
+      const vel = { x: 0, y: 0 }
+      clones.push({
+        pos,
+        vel,
+        alive: true,
+        radius: 28 + Math.random() * 12,
+        wobble: Math.random() * Math.PI * 2,
+        hueShift: Math.random() * 50 - 25,
+        emojiTilt: Math.random() * 0.6 - 0.3,
+      })
     }
 
-    const raycaster = new THREE.Raycaster()
-    const mouse = new THREE.Vector2()
+    const pointer = { x: 0, y: 0 }
     let dragging = null
-
-    const clock = new THREE.Clock()
     let raf
+    const start = performance.now()
 
     function resize(){
-      if(!container) return
       const { clientWidth, clientHeight } = container
-      renderer.setSize(clientWidth, clientHeight)
-      camera.aspect = clientWidth / clientHeight
-      camera.updateProjectionMatrix()
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      canvas.width = clientWidth * dpr
+      canvas.height = clientHeight * dpr
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     }
-
-    function pointerToWorld(event){
-      const rect = renderer.domElement.getBoundingClientRect()
-      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-      raycaster.setFromCamera(mouse, camera)
-      const point = new THREE.Vector3()
-      raycaster.ray.intersectPlane(pointerPlane, point)
-      return point
-    }
-
-    function onPointerDown(event){
-      const point = pointerToWorld(event)
-      let nearest = null
-      let dist = 0.6
-      clones.forEach((c) => {
-        if(!c.alive) return
-        const d = c.pos.distanceTo(point)
-        if(d < dist){ nearest = c; dist = d }
-      })
-      if(nearest){
-        dragging = nearest
-        dragging.vel.set(0, 0, 0)
-        renderer.domElement.setPointerCapture(event.pointerId)
-      }
-    }
-
-    function onPointerMove(event){
-      if(!dragging) return
-      const point = pointerToWorld(event)
-      dragging.pos.lerp(point, 0.35)
-    }
-
-    function onPointerUp(event){
-      dragging = null
-      try { renderer.domElement.releasePointerCapture(event.pointerId) } catch(e) { /* ignore */ }
-    }
-
-    renderer.domElement.addEventListener('pointerdown', onPointerDown)
-    renderer.domElement.addEventListener('pointermove', onPointerMove)
-    renderer.domElement.addEventListener('pointerup', onPointerUp)
-    window.addEventListener('resize', resize)
 
     function sampleAudio(){
       const analyser = analyserRef.current
@@ -244,81 +81,197 @@ export default function FireMoodCanvas({ onDone }){
       let sum = 0
       for (let i = 0; i < dataArrayRef.current.length; i++) sum += dataArrayRef.current[i]
       const val = sum / (dataArrayRef.current.length * 255)
-      return Math.min(1, val * 1.3)
+      return clamp(val * 1.3, 0, 1)
     }
 
-    function animate(){
-      const t = clock.getElapsedTime()
-      const audioEnergy = sampleAudio()
-      bg.material.uniforms.uTime.value = t
-      bg.material.uniforms.uAudio.value = audioEnergy
-      vortex.rotation.z += 0.002 + audioEnergy * 0.008
-      vortex.rotation.y += 0.0012
-      movingLight.intensity = 8 + audioEnergy * 12
-      movingLight.position.x = Math.sin(t * 0.8) * 2.8
-      movingLight.position.y = 2 + Math.cos(t * 0.6) * 1.6
+    function drawBackground(t, energy){
+      const { width, height } = canvas
+      const cx = width / (canvas.width / canvas.clientWidth) / 2
+      const cy = height / (canvas.height / canvas.clientHeight) / 2
 
-      stars.rotation.y += 0.0006
-      stars.material.opacity = 0.35 + audioEnergy * 0.45
+      const grad = ctx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(cx, cy))
+      grad.addColorStop(0, palette.base)
+      grad.addColorStop(0.35, palette.glow)
+      grad.addColorStop(1, '#050505')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight)
 
-      const alive = []
-      clones.forEach((c, i) => {
-        if(!c.alive) return
-        const pull = new THREE.Vector3().copy(c.pos).multiplyScalar(-1).normalize().multiplyScalar(0.035 + audioEnergy * 0.05)
-        const swirl = new THREE.Vector3(Math.sin(t * 1.2 + i), Math.sin(t * 0.9 + c.pulse), Math.cos(t * 1.4 + i * 0.5)).multiplyScalar(0.02 + audioEnergy * 0.03)
-        c.vel.multiplyScalar(0.985)
-        c.vel.add(pull)
-        c.vel.add(swirl)
-        if (dragging === c){
-          c.vel.multiplyScalar(0.65)
+      ctx.save()
+      ctx.translate(canvas.clientWidth / 2, canvas.clientHeight / 2)
+      const rings = 8
+      for (let i = 0; i < rings; i++){
+        const r = 40 + i * 40 + Math.sin(t * 0.001 + i) * 14 * (1 + energy)
+        ctx.strokeStyle = `rgba(255,255,255,${0.018 + energy * 0.04})`
+        ctx.lineWidth = 1.2 + energy * 0.6
+        ctx.beginPath()
+        ctx.arc(0, 0, r, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+      ctx.restore()
+
+      const waveCount = 5
+      for (let i = 0; i < waveCount; i++){
+        const y = canvas.clientHeight * (i / (waveCount - 1))
+        ctx.strokeStyle = `rgba(255,255,255,${0.07 + energy * 0.08})`
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        for (let x = 0; x <= canvas.clientWidth; x += 6){
+          const offset = Math.sin((x * 0.02) + t * 0.002 + i) * 12
+          const pulsing = Math.sin(t * 0.0015 + i * 0.6) * 18 * energy
+          const waveY = y + offset + pulsing
+          if (x === 0) ctx.moveTo(x, waveY)
+          else ctx.lineTo(x, waveY)
         }
-        c.pos.add(c.vel)
-        const bob = Math.sin(t * 3.0 + c.pulse) * 0.02
-        c.mesh.position.copy(c.pos)
-        c.mesh.scale.setScalar(1 + audioEnergy * 0.4)
-        c.sprite.position.copy(c.pos.clone().add(new THREE.Vector3(0, 0.05 + bob, 0)))
-        c.sprite.material.opacity = 0.85 + audioEnergy * 0.15
+        ctx.stroke()
+      }
+    }
 
-        if (c.pos.length() < 0.42){
-          c.alive = false
-          c.mesh.visible = false
-          c.sprite.visible = false
-        } else {
-          alive.push(c)
+    function drawClone(c, t, energy){
+      const { x, y } = c.pos
+      const r = c.radius * (1 + energy * 0.35)
+      ctx.save()
+      ctx.translate(canvas.clientWidth / 2 + x, canvas.clientHeight / 2 + y)
+      ctx.rotate(Math.sin(t * 0.002 + c.wobble) * 0.2)
+
+      const bubble = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.2, 0, 0, r)
+      bubble.addColorStop(0, palette.glow)
+      bubble.addColorStop(0.6, palette.base)
+      bubble.addColorStop(1, 'rgba(0,0,0,0.8)')
+      ctx.fillStyle = bubble
+      ctx.strokeStyle = `rgba(0,0,0,0.55)`
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(0, 0, r, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+
+      ctx.fillStyle = 'rgba(255,255,255,0.6)'
+      ctx.beginPath()
+      ctx.ellipse(-r * 0.3, -r * 0.4, r * 0.25, r * 0.18, 0.4, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.save()
+      ctx.rotate(c.emojiTilt)
+      ctx.font = `${r * 1.4}px "Apple Color Emoji", "Noto Color Emoji", sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.shadowColor = 'rgba(0,0,0,0.35)'
+      ctx.shadowBlur = 12
+      ctx.fillText(mood, 0, 4)
+      ctx.restore()
+
+      ctx.beginPath()
+      ctx.strokeStyle = `hsla(${220 + c.hueShift}, 40%, 80%, ${0.35 + energy * 0.3})`
+      ctx.lineWidth = 6
+      ctx.arc(0, 0, r + 8, Math.sin(t * 0.004 + c.wobble) * 0.8, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    function updateClone(c, t, energy, index){
+      if(!c.alive) return
+      const center = { x: 0, y: 0 }
+      const pull = 0.08 + energy * 0.14
+      const swirl = 0.012 + energy * 0.02
+
+      const toCenter = { x: center.x - c.pos.x, y: center.y - c.pos.y }
+      const len = Math.max(0.001, Math.hypot(toCenter.x, toCenter.y))
+      c.vel.x += (toCenter.x / len) * pull
+      c.vel.y += (toCenter.y / len) * pull
+
+      const ang = Math.sin(t * 0.002 + index) * swirl
+      const vx = c.vel.x
+      c.vel.x = vx * Math.cos(ang) - c.vel.y * Math.sin(ang)
+      c.vel.y = vx * Math.sin(ang) + c.vel.y * Math.cos(ang)
+
+      if (dragging === c){
+        c.vel.x *= 0.4
+        c.vel.y *= 0.4
+        const dragTo = { x: pointer.x - canvas.clientWidth / 2, y: pointer.y - canvas.clientHeight / 2 }
+        c.pos.x = lerp(c.pos.x, dragTo.x, 0.3)
+        c.pos.y = lerp(c.pos.y, dragTo.y, 0.3)
+      } else {
+        c.vel.x *= 0.985
+        c.vel.y *= 0.985
+        c.pos.x += c.vel.x * (1 + energy * 0.2)
+        c.pos.y += c.vel.y * (1 + energy * 0.2)
+      }
+
+      const wobbleRadius = 6 + energy * 8
+      c.pos.x += Math.cos(t * 0.004 + c.wobble) * wobbleRadius * 0.03
+      c.pos.y += Math.sin(t * 0.003 + c.wobble * 0.6) * wobbleRadius * 0.03
+
+      if (len < 18){
+        c.alive = false
+      }
+    }
+
+    function animate(now){
+      const t = now - start
+      const energy = sampleAudio()
+      drawBackground(t, energy)
+
+      let alive = 0
+      clones.forEach((c, i) => {
+        updateClone(c, t, energy, i)
+        if (c.alive){
+          drawClone(c, t, energy)
+          alive += 1
         }
       })
 
-      if (alive.length !== clonesLeftRef.current){
-        setClonesLeft(alive.length)
-        clonesLeftRef.current = alive.length
-        if (alive.length === 0 && !completedRef.current){
+      if (alive !== clonesLeftRef.current){
+        setClonesLeft(alive)
+        clonesLeftRef.current = alive
+        if (alive === 0 && !completedRef.current){
           completedRef.current = true
           setResource(resource)
           onDone?.()
         }
       }
 
-      renderer.render(scene, camera)
       raf = requestAnimationFrame(animate)
     }
 
+    function onPointerDown(event){
+      const rect = canvas.getBoundingClientRect()
+      pointer.x = event.clientX - rect.left
+      pointer.y = event.clientY - rect.top
+      let nearest = null
+      let d = 80
+      clones.forEach((c) => {
+        if(!c.alive) return
+        const distance = dist({ x: canvas.clientWidth / 2 + c.pos.x, y: canvas.clientHeight / 2 + c.pos.y }, pointer)
+        if (distance < d){ nearest = c; d = distance }
+      })
+      if(nearest){ dragging = nearest; canvas.setPointerCapture(event.pointerId) }
+    }
+
+    function onPointerMove(event){
+      const rect = canvas.getBoundingClientRect()
+      pointer.x = event.clientX - rect.left
+      pointer.y = event.clientY - rect.top
+    }
+
+    function onPointerUp(event){
+      dragging = null
+      try { canvas.releasePointerCapture(event.pointerId) } catch(e) { /* ignore */ }
+    }
+
     resize()
+    canvas.addEventListener('pointerdown', onPointerDown)
+    canvas.addEventListener('pointermove', onPointerMove)
+    canvas.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('resize', resize)
     raf = requestAnimationFrame(animate)
 
     return () => {
       cancelAnimationFrame(raf)
-      renderer.domElement.removeEventListener('pointerdown', onPointerDown)
-      renderer.domElement.removeEventListener('pointermove', onPointerMove)
-      renderer.domElement.removeEventListener('pointerup', onPointerUp)
+      canvas.removeEventListener('pointerdown', onPointerDown)
+      canvas.removeEventListener('pointermove', onPointerMove)
+      canvas.removeEventListener('pointerup', onPointerUp)
       window.removeEventListener('resize', resize)
-      renderer.dispose()
-      bg.geometry.dispose(); bg.material.dispose()
-      vortex.geometry.dispose(); vortex.material.dispose()
-      stars.geometry.dispose(); starMat.dispose()
-      clones.forEach(({ mesh, sprite }) => {
-        mesh.geometry.dispose(); mesh.material.dispose(); sprite.material.dispose()
-      })
-      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement)
+      if (container.contains(canvas)) container.removeChild(canvas)
       if (audioRef.current){ audioRef.current.pause() }
       if (sourceRef.current){ try { sourceRef.current.disconnect() } catch(e) { /* noop */ } }
       if (analyserRef.current){ try { analyserRef.current.disconnect() } catch(e) { /* noop */ } }
@@ -328,12 +281,12 @@ export default function FireMoodCanvas({ onDone }){
   }, [mood, sensation, intensity, onDone, setResource])
 
   function handleSave(){
-    const canvas = containerRef.current?.querySelector('canvas')
+    const canvas = canvasRef.current
     if(!canvas) return
     const data = canvas.toDataURL('image/png')
     const link = document.createElement('a')
     link.href = data
-    link.download = 'firemood-vjing.png'
+    link.download = 'firemood-illustration.png'
     link.click()
   }
 
