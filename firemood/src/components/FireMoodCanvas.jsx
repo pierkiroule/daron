@@ -4,8 +4,10 @@ import { getProfile } from '../engine/DaronEngine'
 
 export default function FireMoodCanvas({ onDone }){
   const cvsRef = useRef(null)
+  const audioRef = useRef(null)
   const { mood, sensation, intensity, setResource } = useFM()
   const [clonesLeft, setClonesLeft] = useState(intensity)
+  const [audioLevel, setAudioLevel] = useState(0)
 
   useEffect(() => { setClonesLeft(intensity) }, [intensity])
 
@@ -20,6 +22,7 @@ export default function FireMoodCanvas({ onDone }){
     const fire = { x: W/2, y: H*0.35, r: 60, t:0 }
     const balls = []
     const gravity = 0.00025
+    const impacts = []
 
     for(let i=0;i<intensity;i++){
       const angle = Math.random()*Math.PI*2
@@ -77,7 +80,7 @@ export default function FireMoodCanvas({ onDone }){
       ctx.fillStyle = 'rgba(0,0,0,0.18)'
       ctx.fillRect(0,0,W,H)
       fire.t += 0.02
-      const pulse = 1 + Math.sin(fire.t)*0.06
+      const pulse = 1 + Math.sin(fire.t)*0.06 + audioLevel*0.35
       const g = ctx.createRadialGradient(fire.x,fire.y,10, fire.x,fire.y,fire.r*1.9)
       g.addColorStop(0, palette.glow+'ee')
       g.addColorStop(0.5, palette.base+'55')
@@ -129,6 +132,37 @@ export default function FireMoodCanvas({ onDone }){
           b.alive = false
           setClonesLeft((c) => Math.max(0, c-1))
           triggerHaptic()
+          impacts.push({ x: b.x, y: b.y, t: 0, hue: Math.random()*360 })
+        }
+      }
+
+      // effets hypnotiques réactifs à l'audio
+      for(const imp of impacts){
+        imp.t += 1
+        const life = imp.t / 140
+        if (life >= 1) continue
+        const alpha = (1-life) * 0.9
+        const radius = fire.r * (0.6 + life*3 + audioLevel*2)
+        ctx.strokeStyle = `hsla(${imp.hue}, 90%, 65%, ${alpha})`
+        ctx.lineWidth = 3 + audioLevel*6
+        ctx.beginPath()
+        ctx.arc(imp.x, imp.y, radius, 0, Math.PI*2)
+        ctx.stroke()
+
+        const arms = 6
+        for(let i=0;i<arms;i++){
+          const a = i*Math.PI*2/arms + life*4
+          const len = radius * (0.4 + audioLevel)
+          const sx = imp.x + Math.cos(a)*len*0.5
+          const sy = imp.y + Math.sin(a)*len*0.5
+          const ex = imp.x + Math.cos(a)*len
+          const ey = imp.y + Math.sin(a)*len
+          const grad = ctx.createLinearGradient(sx, sy, ex, ey)
+          grad.addColorStop(0, `hsla(${imp.hue+30}, 90%, 70%, ${alpha})`)
+          grad.addColorStop(1, `hsla(${imp.hue+120}, 90%, 70%, 0)`)
+          ctx.strokeStyle = grad
+          ctx.lineWidth = 2 + audioLevel*4
+          ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke()
         }
       }
 
@@ -149,6 +183,44 @@ export default function FireMoodCanvas({ onDone }){
     }
   }, [mood, sensation, intensity, setResource, onDone])
 
+  useEffect(() => {
+    const audio = audioRef.current
+    if(!audio) return
+    let ctx, analyser, dataArray, raf
+
+    function ensureAudio(){
+      if(ctx) return
+      ctx = new AudioContext()
+      const source = ctx.createMediaElementSource(audio)
+      analyser = ctx.createAnalyser()
+      analyser.fftSize = 256
+      dataArray = new Uint8Array(analyser.frequencyBinCount)
+      source.connect(analyser)
+      analyser.connect(ctx.destination)
+    }
+
+    function tick(){
+      if(!analyser) return
+      analyser.getByteFrequencyData(dataArray)
+      const avg = dataArray.reduce((a,b)=>a+b,0) / dataArray.length
+      setAudioLevel(avg / 255)
+      raf = requestAnimationFrame(tick)
+    }
+
+    function onPlay(){
+      ensureAudio()
+      ctx.resume()
+      tick()
+    }
+    audio.addEventListener('play', onPlay)
+
+    return () => {
+      audio.removeEventListener('play', onPlay)
+      cancelAnimationFrame(raf)
+      if(ctx){ ctx.close() }
+    }
+  }, [])
+
   function handleSave(){
     const canvas = cvsRef.current
     if(!canvas) return
@@ -166,6 +238,9 @@ export default function FireMoodCanvas({ onDone }){
         <button className="btn" onClick={handleSave} aria-label="Sauvegarder la trace">Sauvegarder la trace</button>
         <span className="small" style={{alignSelf:'center'}}>Clones restants: {clonesLeft}</span>
       </div>
+      <audio ref={audioRef} src="https://raw.githubusercontent.com/effacestudios/Royalty-Free-Music-Pack/master/Starter.mp3" controls preload="none" style={{position:'absolute', bottom:10, left:10, right:10, width:'calc(100% - 20px)'}}>
+        Votre navigateur ne supporte pas l'audio.
+      </audio>
     </div>
   )
 }
