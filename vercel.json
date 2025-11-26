@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "framework": "vite",
+  "installCommand": "cd firemood && npm install",
+  "buildCommand": "cd firemood && npm run build",
+  "outputDirectory": "firemood/dist",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

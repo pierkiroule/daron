@@ -105,6 +105,15 @@ npm run build
 npm run preview
 ```
 
+### Déploiement Vercel (monorepo)
+
+Le dépôt racine contient le code dans le dossier `firemood/`. Le fichier `vercel.json` à la racine indique à Vercel de :
+
+- installer et builder dans `firemood/` ;
+- servir le dossier de sortie `firemood/dist`.
+
+Aucune configuration supplémentaire n'est nécessaire côté Vercel : push → build → déploiement.
+
 ---
 
 ## ▶️ Tests manuels recommandés
