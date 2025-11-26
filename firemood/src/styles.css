@@ -11,5 +11,11 @@ h1 { font-size:20px; margin:12px 0; }
 .slider { width:100%; }
 .center { display:flex; justify-content:center; align-items:center; }
 .small { opacity:.8; font-size:12px; }
-.floating-actions { position:absolute; bottom:12px; left:12px; right:12px; display:flex; gap:8px; justify-content:center; }
+.floating-actions { position:absolute; bottom:12px; left:12px; right:12px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
 .tagline { opacity:0.8; margin-top:4px; font-size:14px; }
+.visualizer-shell { position:relative; height:100vh; background:#000; overflow:hidden; }
+.vjing-stage { position:relative; height:100vh; width:100%; background:#000; }
+.visualizer-overlay { position:absolute; inset:0; display:flex; align-items:flex-end; justify-content:center; padding:20px; pointer-events:none; background:radial-gradient(circle at 50% 30%, rgba(0,0,0,0.25), rgba(0,0,0,0.75)); }
+.visualizer-overlay .card, .visualizer-overlay button { pointer-events:auto; }
+.audio-upload { position:relative; overflow:hidden; text-align:center; }
+.audio-upload input { position:absolute; inset:0; opacity:0; cursor:pointer; }
