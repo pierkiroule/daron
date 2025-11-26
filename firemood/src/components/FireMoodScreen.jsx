@@ -11,7 +11,14 @@ export default function FireMoodScreen({ onRestart }){
     setResource(null)
   }, [setResource])
 
-  return done
-    ? <ResourceCard text={resource} onRestart={onRestart}/>
-    : <FireMoodCanvas onDone={() => setDone(true)}/>
+  return (
+    <div className="visualizer-shell">
+      <FireMoodCanvas onDone={() => setDone(true)} />
+      {done && (
+        <div className="visualizer-overlay">
+          <ResourceCard text={resource} onRestart={onRestart} />
+        </div>
+      )}
+    </div>
+  )
 }
