@@ -19,12 +19,19 @@ export default function FireMoodCanvas({ onDone }){
     const { palette, resource } = getProfile(mood, sensation, intensity)
     const fire = { x: W/2, y: H*0.35, r: 60, t:0 }
     const balls = []
+    const gravity = 0.00025
+
     for(let i=0;i<intensity;i++){
+      const angle = Math.random()*Math.PI*2
+      const radius = fire.r * (2.4 + Math.random()*1.2)
+      const speed = 1.2 + Math.random()*0.6
+      const dir = angle + Math.PI/2
       balls.push({
-        x: W*0.5 + (Math.random()-0.5)*80,
-        y: H*0.8 + (Math.random()-0.5)*20,
-        vx: (Math.random()*2-1)*2,
-        vy: - (3 + Math.random()*1.5),
+        x: fire.x + Math.cos(angle)*radius,
+        y: fire.y + Math.sin(angle)*radius,
+        vx: Math.cos(dir)*speed,
+        vy: Math.sin(dir)*speed,
+        trail: [],
         alive: true
       })
     }
@@ -35,38 +42,35 @@ export default function FireMoodCanvas({ onDone }){
       }
     }
 
-    let dragging = null
+    function pushNearby(x, y){
+      const pushRadius = 110
+      for(const b of balls){
+        if(!b.alive) continue
+        const dx = b.x - x
+        const dy = b.y - y
+        const d = Math.hypot(dx, dy)
+        if (d < pushRadius && d > 6){
+          const strength = (1 - d/pushRadius) * 8
+          b.vx += (dx/d) * strength
+          b.vy += (dy/d) * strength
+        }
+      }
+    }
+
     function onDown(e){
       const rect = canvas.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
-      const b = balls.find((ball) => ball.alive && Math.hypot(ball.x - x, ball.y - y) < 22)
-      if(b){ dragging = b; canvas.setPointerCapture(e.pointerId) }
-    }
-    function onMove(e){
-      if(!dragging) return
-      const rect = canvas.getBoundingClientRect()
-      dragging.x = e.clientX - rect.left
-      dragging.y = e.clientY - rect.top
+      pushNearby(x, y)
+      canvas.setPointerCapture(e.pointerId)
     }
     function onUp(e){
-      if(!dragging) return
-      const rect = canvas.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
-      dragging.x = x
-      dragging.y = y
-      if (Math.hypot(dragging.x-fire.x, dragging.y-fire.y) < fire.r){
-        dragging.alive = false
-        setClonesLeft((c) => Math.max(0, c-1))
-        triggerHaptic()
+      if (e.pointerId) {
+        canvas.releasePointerCapture(e.pointerId)
       }
-      dragging = null
-      canvas.releasePointerCapture(e.pointerId)
     }
 
     canvas.addEventListener('pointerdown', onDown)
-    canvas.addEventListener('pointermove', onMove)
     canvas.addEventListener('pointerup', onUp)
 
     function bg(){
@@ -74,9 +78,9 @@ export default function FireMoodCanvas({ onDone }){
       ctx.fillRect(0,0,W,H)
       fire.t += 0.02
       const pulse = 1 + Math.sin(fire.t)*0.06
-      const g = ctx.createRadialGradient(fire.x,fire.y,10, fire.x,fire.y,fire.r*1.8)
+      const g = ctx.createRadialGradient(fire.x,fire.y,10, fire.x,fire.y,fire.r*1.9)
       g.addColorStop(0, palette.glow+'ee')
-      g.addColorStop(0.6, palette.base+'55')
+      g.addColorStop(0.5, palette.base+'55')
       g.addColorStop(1, 'transparent')
       ctx.fillStyle = g
       ctx.beginPath(); ctx.arc(fire.x,fire.y,fire.r*pulse,0,Math.PI*2); ctx.fill()
@@ -87,19 +91,44 @@ export default function FireMoodCanvas({ onDone }){
 
       for(const b of balls){
         if(!b.alive) continue
+
+        const dx = fire.x - b.x
+        const dy = fire.y - b.y
+        const dist = Math.hypot(dx, dy) || 1
+        const acc = gravity * Math.min(dist, 400)
+        b.vx += (dx / dist) * acc
+        b.vy += (dy / dist) * acc
+
+        b.vx *= 0.995
+        b.vy *= 0.995
+        b.x += b.vx
+        b.y += b.vy
+
+        b.trail.push({ x: b.x, y: b.y })
+        if (b.trail.length > 18) b.trail.shift()
+
+        // traînée comète
+        ctx.lineWidth = 2
+        ctx.strokeStyle = palette.glow + '55'
+        ctx.beginPath()
+        b.trail.forEach((p, idx) => {
+          if(idx===0) ctx.moveTo(p.x, p.y)
+          else ctx.lineTo(p.x, p.y)
+        })
+        ctx.stroke()
+
+        // halo
         ctx.fillStyle = palette.base+'66'
-        ctx.beginPath(); ctx.arc(b.x, b.y, 6, 0, Math.PI*2); ctx.fill()
+        ctx.beginPath(); ctx.arc(b.x, b.y, 8, 0, Math.PI*2); ctx.fill()
         ctx.font = '24px sans-serif'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         ctx.fillText(mood, b.x, b.y)
 
-        if (dragging!==b){
-          b.vy += 0.2
-          b.x += b.vx
-          b.y += b.vy
-          if(b.x<10 || b.x>W-10) b.vx *= -0.9
-          if(b.y<10 || b.y>H-10) b.vy *= -0.7
+        if (Math.hypot(dx, dy) < fire.r){
+          b.alive = false
+          setClonesLeft((c) => Math.max(0, c-1))
+          triggerHaptic()
         }
       }
 
@@ -116,7 +145,6 @@ export default function FireMoodCanvas({ onDone }){
       cancelAnimationFrame(raf)
       ro.disconnect()
       canvas.removeEventListener('pointerdown', onDown)
-      canvas.removeEventListener('pointermove', onMove)
       canvas.removeEventListener('pointerup', onUp)
     }
   }, [mood, sensation, intensity, setResource, onDone])
